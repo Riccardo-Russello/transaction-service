@@ -1,6 +1,5 @@
 package it.russello.contocorrente.security;
 
-import it.russello.contocorrente.client.InternalClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
@@ -8,11 +7,19 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
+import it.russello.contocorrente.exception.ApiException;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+
+import java.util.Map;
 
 @Component("accountSecurity")
 @RequiredArgsConstructor
 public class AccountSecurity {
-    private final InternalClient internalClient;
+    private final RestClient restClient;
 
     @Value("${clients.account.base-url}")
     private String accountBaseUrl;
@@ -51,6 +58,40 @@ public class AccountSecurity {
                 && authentication != null
                 && authentication.isAuthenticated()
                 && authentication.getPrincipal() instanceof Jwt
-                && internalClient.check(accountBaseUrl, "/internal/accounts/{id}/owned", accountId);
+                && ownsAccount(accountId);
     }
+
+    private boolean ownsAccount(Long id) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken jwt)
+                || !jwt.isAuthenticated()) {
+            throw new AuthenticationCredentialsNotFoundException(
+                    "Autenticazione JWT richiesta");
+        }
+
+        try {
+            Map<?, ?> account = restClient.get()
+                    .uri(accountBaseUrl + "/api/account/{id}", id)
+                    .headers(headers -> headers.setBearerAuth(jwt.getToken().getTokenValue()))
+                    .retrieve()
+                    .body(Map.class);
+
+            if (account != null && account.get("personId") instanceof Number ownerId) {
+                return currentPersonId().equals(ownerId.longValue());
+            }
+        } catch (HttpClientErrorException.Forbidden | HttpClientErrorException.NotFound ex) {
+            return false;
+        } catch (RestClientException ex) {
+            throw upstreamUnavailable();
+        }
+        throw upstreamUnavailable();
+    }
+
+    private ApiException upstreamUnavailable() {
+        return new ApiException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "UPSTREAM_UNAVAILABLE",
+                "Servizio remoto non disponibile");
+    }
+
 }
