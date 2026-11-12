@@ -14,7 +14,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
-import java.util.Map;
+import it.russello.contocorrente.dto.AccountResponse;
 
 @Component("accountSecurity")
 @RequiredArgsConstructor
@@ -70,14 +70,14 @@ public class AccountSecurity {
         }
 
         try {
-            Map<?, ?> account = restClient.get()
+            AccountResponse account = restClient.get()
                     .uri(accountBaseUrl + "/api/account/{id}", id)
                     .headers(headers -> headers.setBearerAuth(jwt.getToken().getTokenValue()))
                     .retrieve()
-                    .body(Map.class);
+                    .body(AccountResponse.class);
 
-            if (account != null && account.get("personId") instanceof Number ownerId) {
-                return currentPersonId().equals(ownerId.longValue());
+            if (account != null && account.personId() != null) {
+                return currentPersonId().equals(account.personId());
             }
         } catch (HttpClientErrorException.Forbidden | HttpClientErrorException.NotFound ex) {
             return false;

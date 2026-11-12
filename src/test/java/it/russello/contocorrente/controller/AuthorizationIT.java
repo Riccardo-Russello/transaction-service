@@ -2,7 +2,6 @@ package it.russello.contocorrente.controller;
 
 import jakarta.persistence.EntityManager;
 
-import java.util.Map;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
@@ -13,6 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
+import it.russello.contocorrente.dto.AccountResponse;
 import it.russello.contocorrente.entity.Account;
 import it.russello.contocorrente.entity.Person;
 import it.russello.contocorrente.repository.AccountRepository;
@@ -111,7 +111,7 @@ class AuthorizationIT {
     void userCannotOperateOnAnotherPersonsAccount(String operation) throws Exception {
         BigDecimal before = source.getBalance();
 
-        when(stubAccountLookup().body(Map.class))
+        when(stubAccountLookup().body(AccountResponse.class))
                 .thenThrow(HttpClientErrorException.create(
                         HttpStatus.FORBIDDEN, "Forbidden", HttpHeaders.EMPTY, new byte[0], null));
 
@@ -131,8 +131,8 @@ class AuthorizationIT {
             default -> 200;
         };
 
-        when(stubAccountLookup().body(Map.class))
-                .thenReturn(Map.of("personId", owner.getId()));
+        when(stubAccountLookup().body(AccountResponse.class))
+                .thenReturn(new AccountResponse(source.getId(), owner.getId(), null, null, null));
         mockMvc.perform(operation(operation).with(user(owner.getId())))
                 .andExpect(status().is(expected));
     }
