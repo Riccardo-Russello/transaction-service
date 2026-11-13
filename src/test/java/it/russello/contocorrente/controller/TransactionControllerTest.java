@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -49,6 +50,8 @@ public class TransactionControllerTest {
     private MockMvc mockMvc;
     @MockitoBean
     private TransactionService transactionService;
+    @MockitoBean
+    private RestClient restClient;
 
     private static AccountTransactionRequest transactionRequest() {
         return new AccountTransactionRequest(new BigDecimal("25.00"), TransactionType.DEPOSIT, null);

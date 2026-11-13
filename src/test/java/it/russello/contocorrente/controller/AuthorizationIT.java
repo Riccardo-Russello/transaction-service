@@ -2,10 +2,17 @@ package it.russello.contocorrente.controller;
 
 import jakarta.persistence.EntityManager;
 
-import it.russello.contocorrente.client.InternalClient;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import org.springframework.web.client.RestClient;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
+import it.russello.contocorrente.dto.AccountResponse;
 import it.russello.contocorrente.entity.Account;
 import it.russello.contocorrente.entity.Person;
 import it.russello.contocorrente.repository.AccountRepository;
@@ -43,7 +50,7 @@ class AuthorizationIT {
     @Autowired
     AccountRepository accountRepository;
     @MockitoBean
-    InternalClient internalClient;
+    RestClient restClient;
 
     Person owner;
     Person other;
@@ -104,6 +111,10 @@ class AuthorizationIT {
     void userCannotOperateOnAnotherPersonsAccount(String operation) throws Exception {
         BigDecimal before = source.getBalance();
 
+        when(stubAccountLookup().body(AccountResponse.class))
+                .thenThrow(HttpClientErrorException.create(
+                        HttpStatus.FORBIDDEN, "Forbidden", HttpHeaders.EMPTY, new byte[0], null));
+
         mockMvc.perform(operation(operation).with(user(other.getId())))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
@@ -120,8 +131,8 @@ class AuthorizationIT {
             default -> 200;
         };
 
-        when(internalClient.check("http://account.test",
-                "/internal/accounts/{id}/owned", source.getId())).thenReturn(true);
+        when(stubAccountLookup().body(AccountResponse.class))
+                .thenReturn(new AccountResponse(source.getId(), owner.getId(), null, null, null));
         mockMvc.perform(operation(operation).with(user(owner.getId())))
                 .andExpect(status().is(expected));
     }
@@ -138,4 +149,19 @@ class AuthorizationIT {
                 .andExpect(status().is(expected));
     }
 
+
+    private RestClient.ResponseSpec stubAccountLookup() {
+        RestClient.RequestHeadersUriSpec<?> uriSpec =
+                mock(RestClient.RequestHeadersUriSpec.class);
+        RestClient.RequestHeadersSpec<?> request =
+                mock(RestClient.RequestHeadersSpec.class);
+        RestClient.ResponseSpec response = mock(RestClient.ResponseSpec.class);
+
+        doReturn(uriSpec).when(restClient).get();
+        doReturn(request).when(uriSpec)
+                .uri("http://account.test/api/account/{id}", source.getId());
+        doReturn(request).when(request).headers(any());
+        when(request.retrieve()).thenReturn(response);
+        return response;
+    }
 }
