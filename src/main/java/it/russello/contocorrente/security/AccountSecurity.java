@@ -1,28 +1,18 @@
 package it.russello.contocorrente.security;
 
+import it.russello.contocorrente.client.AccountClient;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.stereotype.Component;
-import it.russello.contocorrente.exception.ApiException;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
-
-import it.russello.contocorrente.dto.AccountResponse;
+import org.springframework.stereotype.Component;
 
 @Component("accountSecurity")
 @RequiredArgsConstructor
 public class AccountSecurity {
-    private final RestClient restClient;
-
-    @Value("${clients.account.base-url}")
-    private String accountBaseUrl;
+    private final AccountClient accountClient;
 
     public Long currentPersonId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -69,29 +59,9 @@ public class AccountSecurity {
                     "Autenticazione JWT richiesta");
         }
 
-        try {
-            AccountResponse account = restClient.get()
-                    .uri(accountBaseUrl + "/api/account/{id}", id)
-                    .headers(headers -> headers.setBearerAuth(jwt.getToken().getTokenValue()))
-                    .retrieve()
-                    .body(AccountResponse.class);
-
-            if (account != null && account.personId() != null) {
-                return currentPersonId().equals(account.personId());
-            }
-        } catch (HttpClientErrorException.Forbidden | HttpClientErrorException.NotFound ex) {
-            return false;
-        } catch (RestClientException ex) {
-            throw upstreamUnavailable();
-        }
-        throw upstreamUnavailable();
-    }
-
-    private ApiException upstreamUnavailable() {
-        return new ApiException(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                "UPSTREAM_UNAVAILABLE",
-                "Servizio remoto non disponibile");
+        return accountClient.findAccount(id, jwt.getToken().getTokenValue())
+                .map(account -> currentPersonId().equals(account.personId()))
+                .orElse(false);
     }
 
 }
