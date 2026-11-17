@@ -1,21 +1,18 @@
 package it.russello.contocorrente.security;
 
-import it.russello.contocorrente.client.InternalClient;
+import it.russello.contocorrente.client.AccountClient;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 
 @Component("accountSecurity")
 @RequiredArgsConstructor
 public class AccountSecurity {
-    private final InternalClient internalClient;
-
-    @Value("${clients.account.base-url}")
-    private String accountBaseUrl;
+    private final AccountClient accountClient;
 
     public Long currentPersonId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -51,6 +48,20 @@ public class AccountSecurity {
                 && authentication != null
                 && authentication.isAuthenticated()
                 && authentication.getPrincipal() instanceof Jwt
-                && internalClient.check(accountBaseUrl, "/internal/accounts/{id}/owned", accountId);
+                && ownsAccount(accountId);
     }
+
+    private boolean ownsAccount(Long id) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken jwt)
+                || !jwt.isAuthenticated()) {
+            throw new AuthenticationCredentialsNotFoundException(
+                    "Autenticazione JWT richiesta");
+        }
+
+        return accountClient.findAccount(id, jwt.getToken().getTokenValue())
+                .map(account -> currentPersonId().equals(account.personId()))
+                .orElse(false);
+    }
+
 }

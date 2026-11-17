@@ -301,15 +301,16 @@ public class TransactionControllerIT {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void internalEndpointFindsIncomingAndOutgoingTransactions(boolean incoming) throws Exception {
+    void listIncludesIncomingAndOutgoingTransactions(boolean incoming) throws Exception {
         AccountTransaction movement = incoming
                 ? new AccountTransaction(destination, source, new BigDecimal("1.00"))
                 : new AccountTransaction(source, TransactionType.DEPOSIT, new BigDecimal("1.00"));
         transactionRepository.saveAndFlush(movement);
 
-        mockMvc.perform(get("/internal/transactions/by-account/{id}/exists", source.getId())
+        mockMvc.perform(get("/api/account/{id}/transaction", source.getId())
                         .with(admin(source.getPerson().getId())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$").value(true));
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].type").value(incoming ? "TRANSFER" : "DEPOSIT"));
     }
 }
