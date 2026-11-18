@@ -19,6 +19,15 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
+import com.github.tomakehurst.wiremock.WireMockServer;
+import org.wiremock.spring.ConfigureWireMock;
+import org.wiremock.spring.EnableWireMock;
+import org.wiremock.spring.InjectWireMock;
+
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
+import static it.russello.contocorrente.support.TestJwt.user;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -32,6 +41,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
+@EnableWireMock(@ConfigureWireMock(
+        name = "account-service",
+        baseUrlProperties = "clients.account.base-url",
+        filesUnderClasspath = "wiremock"
+))
 @AutoConfigureMockMvc
 @Transactional
 public class TransactionControllerIT {
@@ -43,12 +57,15 @@ public class TransactionControllerIT {
     private AccountTransactionRepository transactionRepository;
     @Autowired
     private EntityManager entityManager;
+    @InjectWireMock("account-service")
+    private WireMockServer accountMock;
 
     private Account source;
     private Account destination;
 
     @BeforeEach
     void setUp() {
+        accountMock.resetAll();
         Person person = new Person("Mario", "Rossi", LocalDate.of(1990, 5, 15));
         person.setUsername("mario.rossi");
         person.setPassword("passwmario");
@@ -162,9 +179,11 @@ public class TransactionControllerIT {
                 .thenComparing(AccountTransaction::getId)
                 .reversed());
         entityManager.clear();
-        var result = mockMvc.perform(get("/api/account/{id}/transaction", source.getId()).with(admin(source.getPerson().getId())))
+        var result = mockMvc.perform(
+                        get("/api/account/{id}/transaction", source.getId()).with(user(9001L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(5));
+        verifyAccountLookup(source.getId());
         for (int i = 0; i < 5; i++) {
             AccountTransaction expected = transactions.get(i);
             String path = "$[" + i + "]";
@@ -189,6 +208,38 @@ public class TransactionControllerIT {
         mockMvc.perform(get("/api/account/{id}/transaction", source.getId()).with(admin(source.getPerson().getId())))
                 .andExpect(status().isOk())
                 .andExpect(content().json("[]"));
+    }
+
+    @Test
+    void getLastFiveTransactionsForbiddenForNonOwner() throws Exception {
+        mockMvc.perform(
+                        get("/api/account/{id}/transaction", source.getId()).with(user(9002L)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+
+        verifyAccountLookup(source.getId());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "900001, 403, ACCESS_DENIED",
+            "900002, 503, UPSTREAM_UNAVAILABLE"
+    })
+    void getLastFiveTransactionsWhenAccountLookupFails(
+            long accountId, int expectedStatus, String expectedCode) throws Exception {
+        mockMvc.perform(
+                        get("/api/account/{id}/transaction", accountId).with(user(9001L)))
+                .andExpect(status().is(expectedStatus))
+                .andExpect(jsonPath("$.code").value(expectedCode));
+
+        verifyAccountLookup(accountId);
+    }
+
+    private void verifyAccountLookup(long accountId) {
+        accountMock.verify(1, getRequestedFor(urlPathEqualTo("/api/account/" + accountId))
+                .withHeader("Authorization", equalTo("Bearer token")));
+        assertTrue(accountMock.findAllUnmatchedRequests().isEmpty(),
+                "La richiesta ad account-service deve corrispondere a un mapping JSON");
     }
 
     @ParameterizedTest

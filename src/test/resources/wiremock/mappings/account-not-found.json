@@ -1,0 +1,10 @@
+{
+  "priority": 1,
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/account/900001"
+  },
+  "response": {
+    "status": 404
+  }
+}
