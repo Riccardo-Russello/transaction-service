@@ -6,7 +6,9 @@ CREATE TABLE accounttransaction
     type                   VARCHAR(10)    NOT NULL,
     amount                 DECIMAL(15, 2) NOT NULL,
     occurred_at            DATETIME(6) NOT NULL,
+    kafka_published BOOLEAN NULL DEFAULT FALSE,
     PRIMARY KEY (id),
+    KEY             ix_accounttransaction_kafka_pending (kafka_published, id),
     CONSTRAINT fk_transaction_account
         FOREIGN KEY (account_id) REFERENCES account (id),
     CONSTRAINT fk_transaction_destination
