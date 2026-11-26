@@ -2,8 +2,11 @@ package it.russello.contocorrente.controller;
 
 import it.russello.contocorrente.dto.AccountResponse;
 import it.russello.contocorrente.entity.Account;
+import it.russello.contocorrente.entity.AccountTransaction;
 import it.russello.contocorrente.entity.Person;
+import it.russello.contocorrente.entity.TransactionType;
 import it.russello.contocorrente.repository.AccountRepository;
+import it.russello.contocorrente.repository.AccountTransactionRepository;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -45,6 +48,8 @@ class AuthorizationIT {
     EntityManager entityManager;
     @Autowired
     AccountRepository accountRepository;
+    @Autowired
+    AccountTransactionRepository transactionRepository;
     @MockitoBean
     RestClient restClient;
 
@@ -59,8 +64,9 @@ class AuthorizationIT {
         other = savePerson("auth.other");
 
         source = new Account(owner, "AUTH-SOURCE");
-        source.setBalance(new BigDecimal("100.00"));
         accountRepository.saveAndFlush(source);
+        transactionRepository.saveAndFlush(
+                new AccountTransaction(source, TransactionType.DEPOSIT, new BigDecimal("100.00")));
 
         destination = accountRepository.saveAndFlush(
                 new Account(other, "AUTH-DESTINATION"));
@@ -105,7 +111,7 @@ class AuthorizationIT {
     @ParameterizedTest
     @ValueSource(strings = {"TRANSACTION_CREATE", "TRANSACTION_LIST", "TRANSFER"})
     void userCannotOperateOnAnotherPersonsAccount(String operation) throws Exception {
-        BigDecimal before = source.getBalance();
+        long before = transactionRepository.count();
 
         when(stubAccountLookup().body(AccountResponse.class))
                 .thenThrow(HttpClientErrorException.create(
@@ -115,8 +121,7 @@ class AuthorizationIT {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
 
-        assertEquals(before,
-                accountRepository.findById(source.getId()).orElseThrow().getBalance());
+        assertEquals(before, transactionRepository.count());
     }
 
     @ParameterizedTest
