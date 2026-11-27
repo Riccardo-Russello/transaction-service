@@ -18,6 +18,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -39,6 +40,8 @@ public class TransactionServiceTest {
     private AccountRepository accountRepository;
     @Mock
     private AccountTransactionRepository accountTransactionRepository;
+    @Mock
+    private ApplicationEventPublisher events;
     @InjectMocks
     private TransactionService transactionService;
 
@@ -90,22 +93,23 @@ public class TransactionServiceTest {
         Account existing = account(1L, "100.00");
         AccountTransactionRequest request = new AccountTransactionRequest(money("25.00"), type, null);
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
-        when(accountRepository.save(existing)).thenReturn(existing);
-        when(accountTransactionRepository.saveAndFlush(any(AccountTransaction.class)))
+        when(accountTransactionRepository.save(any(AccountTransaction.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AccountTransactionResponse response = transactionService.createTransaction(1L, request);
         assertEquals(new AccountTransactionResponse(
                 100L, type, money("25.00"), OCCURRED_AT, money(expectedBalance), 1L, null, null), response);
-        assertEquals(money(expectedBalance), existing.getBalance());
+        assertEquals(money("100.00"), existing.getBalance());
         var captor = org.mockito.ArgumentCaptor.forClass(AccountTransaction.class);
-        verify(accountTransactionRepository).saveAndFlush(captor.capture());
+        verify(accountTransactionRepository).save(captor.capture());
         AccountTransaction submitted = captor.getValue();
         assertSame(existing, submitted.getAccount());
         assertNull(submitted.getDestinationAccount());
         assertEquals(type, submitted.getType());
         assertEquals(money("25.00"), submitted.getAmount());
-        verify(accountRepository).save(existing);
-        verify(accountTransactionRepository, never()).save(any());
+        verify(accountRepository, never()).save(any());
+        BigDecimal delta = type == TransactionType.WITHDRAWAL ? money("-25.00") : money("25.00");
+        verify(events).publishEvent(new TransactionPublisher.BalanceChanged(1L, delta));
+        verifyNoMoreInteractions(events);
     }
 
     @ParameterizedTest
@@ -115,12 +119,11 @@ public class TransactionServiceTest {
     void acceptsBalanceLimits(TransactionType type, String initialBalance, String amount, String expectedBalance) {
         Account existing = account(1L, initialBalance);
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
-        when(accountRepository.save(existing)).thenReturn(existing);
-        when(accountTransactionRepository.saveAndFlush(any(AccountTransaction.class)))
+        when(accountTransactionRepository.save(any(AccountTransaction.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AccountTransactionResponse response = transactionService.createTransaction(1L, new AccountTransactionRequest(money(amount), type, null));
         assertEquals(money(expectedBalance), response.balance());
-        assertEquals(money(expectedBalance), existing.getBalance());
+        assertEquals(money(initialBalance), existing.getBalance());
     }
 
     @ParameterizedTest
@@ -136,16 +139,13 @@ public class TransactionServiceTest {
         TransferResponse response = transactionService.transfer(1L, new TransferRequest(2L, money(amount)));
         assertEquals(money(expectedSource), response.balance());
         assertEquals(money(expectedDestination), response.destinationBalance());
-        assertEquals(money(expectedSource), source.getBalance());
-        assertEquals(money(expectedDestination), destination.getBalance());
     }
 
     @Test
     void normalizesAmountTwoDecimals() {
         Account existing = account(1L, "100.00");
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
-        when(accountRepository.save(existing)).thenReturn(existing);
-        when(accountTransactionRepository.saveAndFlush(any(AccountTransaction.class)))
+        when(accountTransactionRepository.save(any(AccountTransaction.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AccountTransactionResponse response = transactionService.createTransaction(1L, new AccountTransactionRequest(money("25"), TransactionType.DEPOSIT, null));
         assertEquals(money("25.00"), response.amount());
@@ -157,7 +157,7 @@ public class TransactionServiceTest {
     void invalidTransaction(Long accountId, AccountTransactionRequest request) {
         ApiException exception = assertThrows(ApiException.class, () -> transactionService.createTransaction(accountId, request));
         assertApiError(exception, HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION_DATA");
-        verifyNoInteractions(accountRepository, accountTransactionRepository);
+        verifyNoInteractions(accountRepository, accountTransactionRepository, events);
     }
 
     @Test
@@ -167,7 +167,7 @@ public class TransactionServiceTest {
         assertApiError(exception, HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
         verify(accountRepository).findByIdForUpdate(1L);
         verifyNoMoreInteractions(accountRepository);
-        verifyNoInteractions(accountTransactionRepository);
+        verifyNoInteractions(accountTransactionRepository, events);
     }
 
     @ParameterizedTest
@@ -178,9 +178,9 @@ public class TransactionServiceTest {
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
         ApiException exception = assertThrows(ApiException.class, () -> transactionService.createTransaction(1L, new AccountTransactionRequest(money(amount), type, null)));
         assertApiError(exception, HttpStatus.CONFLICT, code);
-        assertEquals(money(initialBalance), existing.getBalance());
         verify(accountRepository, never()).save(any());
-        verifyNoInteractions(accountTransactionRepository);
+        verify(accountTransactionRepository, never()).save(any());
+        verifyNoInteractions(events);
     }
 
     @ParameterizedTest
@@ -203,8 +203,8 @@ public class TransactionServiceTest {
         }
         assertEquals(new AccountTransactionResponse(100L, TransactionType.TRANSFER, money("25.00"), OCCURRED_AT,
                 money("75.00"), 1L, 2L, money("75.00")), response);
-        assertEquals(money("75.00"), source.getBalance());
-        assertEquals(money("75.00"), destination.getBalance());
+        assertEquals(money("100.00"), source.getBalance());
+        assertEquals(money("50.00"), destination.getBalance());
         var captor = org.mockito.ArgumentCaptor.forClass(AccountTransaction.class);
         verify(accountTransactionRepository).save(captor.capture());
         assertSame(source, captor.getValue().getAccount());
@@ -212,7 +212,9 @@ public class TransactionServiceTest {
         assertEquals(TransactionType.TRANSFER, captor.getValue().getType());
         assertEquals(money("25.00"), captor.getValue().getAmount());
         verify(accountRepository, never()).save(any());
-        verify(accountTransactionRepository, never()).saveAndFlush(any());
+        verify(events).publishEvent(new TransactionPublisher.BalanceChanged(1L, money("-25.00")));
+        verify(events).publishEvent(new TransactionPublisher.BalanceChanged(2L, money("25.00")));
+        verifyNoMoreInteractions(events);
     }
 
     @ParameterizedTest
@@ -220,7 +222,7 @@ public class TransactionServiceTest {
     void invalidTransfer(Long sourceId, TransferRequest request) {
         ApiException exception = assertThrows(ApiException.class, () -> transactionService.transfer(sourceId, request));
         assertApiError(exception, HttpStatus.BAD_REQUEST, "INVALID_TRANSACTION_DATA");
-        verifyNoInteractions(accountRepository, accountTransactionRepository);
+        verifyNoInteractions(accountRepository, accountTransactionRepository, events);
     }
 
     @ParameterizedTest
@@ -235,7 +237,7 @@ public class TransactionServiceTest {
         assertApiError(exception, HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
         assertEquals(money("100.00"), source.getBalance());
         verify(accountRepository, never()).save(any());
-        verifyNoInteractions(accountTransactionRepository);
+        verifyNoInteractions(accountTransactionRepository, events);
         if (missingId == 1L) {
             verify(accountRepository, never()).findByIdForUpdate(2L);
         }
@@ -251,10 +253,9 @@ public class TransactionServiceTest {
         when(accountRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(destination));
         ApiException exception = assertThrows(ApiException.class, () -> transactionService.transfer(1L, new TransferRequest(2L, money(amount))));
         assertApiError(exception, HttpStatus.CONFLICT, code);
-        assertEquals(money(sourceBalance), source.getBalance());
-        assertEquals(money(destinationBalance), destination.getBalance());
         verify(accountRepository, never()).save(any());
-        verifyNoInteractions(accountTransactionRepository);
+        verify(accountTransactionRepository, never()).save(any());
+        verifyNoInteractions(events);
     }
 
     @Test
@@ -292,6 +293,6 @@ public class TransactionServiceTest {
         ApiException exception = assertThrows(ApiException.class,
                 () -> transactionService.getLastFiveTransactions(1L));
         assertApiError(exception, HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND");
-        verifyNoInteractions(accountTransactionRepository);
+        verifyNoInteractions(accountTransactionRepository, events);
     }
 }
