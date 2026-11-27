@@ -90,16 +90,15 @@ public class TransactionServiceTest {
     @CsvSource({"DEPOSIT, 125.00",
             "WITHDRAWAL, 75.00"})
     void createDepositOrWithdrawal(TransactionType type, String expectedBalance) {
-        Account existing = account(1L, "0.00");
+        Account existing = account(1L, "100.00");
         AccountTransactionRequest request = new AccountTransactionRequest(money("25.00"), type, null);
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
-        when(accountTransactionRepository.calculateBalance(1L)).thenReturn(money("100.00"));
         when(accountTransactionRepository.save(any(AccountTransaction.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AccountTransactionResponse response = transactionService.createTransaction(1L, request);
         assertEquals(new AccountTransactionResponse(
                 100L, type, money("25.00"), OCCURRED_AT, money(expectedBalance), 1L, null, null), response);
-        assertEquals(new BigDecimal("0.00"), existing.getBalance());
+        assertEquals(money("100.00"), existing.getBalance());
         var captor = org.mockito.ArgumentCaptor.forClass(AccountTransaction.class);
         verify(accountTransactionRepository).save(captor.capture());
         AccountTransaction submitted = captor.getValue();
@@ -108,7 +107,9 @@ public class TransactionServiceTest {
         assertEquals(type, submitted.getType());
         assertEquals(money("25.00"), submitted.getAmount());
         verify(accountRepository, never()).save(any());
-        verify(events).publishEvent(new TransactionPublisher.TransactionCreated(100L));
+        BigDecimal delta = type == TransactionType.WITHDRAWAL ? money("-25.00") : money("25.00");
+        verify(events).publishEvent(new TransactionPublisher.BalanceChanged(1L, delta));
+        verifyNoMoreInteractions(events);
     }
 
     @ParameterizedTest
@@ -116,14 +117,13 @@ public class TransactionServiceTest {
             "WITHDRAWAL, 100.00, 100.00, 0.00",
             "DEPOSIT, 0.00, 9999999999999.99, 9999999999999.99"})
     void acceptsBalanceLimits(TransactionType type, String initialBalance, String amount, String expectedBalance) {
-        Account existing = account(1L, "0.00");
+        Account existing = account(1L, initialBalance);
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
-        when(accountTransactionRepository.calculateBalance(1L)).thenReturn(money(initialBalance));
         when(accountTransactionRepository.save(any(AccountTransaction.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AccountTransactionResponse response = transactionService.createTransaction(1L, new AccountTransactionRequest(money(amount), type, null));
         assertEquals(money(expectedBalance), response.balance());
-        assertEquals(new BigDecimal("0.00"), existing.getBalance());
+        assertEquals(money(initialBalance), existing.getBalance());
     }
 
     @ParameterizedTest
@@ -131,12 +131,10 @@ public class TransactionServiceTest {
             "100.00, 50.00, 100.00, 0.00, 150.00",
             "100.00, 9999999999999.98, 0.01, 99.99, 9999999999999.99"})
     void transferAcceptsExactBalanceLimits(String initialSource, String initialDestination, String amount, String expectedSource, String expectedDestination) {
-        Account source = account(1L, "0.00");
-        Account destination = account(2L, "0.00");
+        Account source = account(1L, initialSource);
+        Account destination = account(2L, initialDestination);
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(source));
-        when(accountTransactionRepository.calculateBalance(1L)).thenReturn(money(initialSource));
         when(accountRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(destination));
-        when(accountTransactionRepository.calculateBalance(2L)).thenReturn(money(initialDestination));
         when(accountTransactionRepository.save(any(AccountTransaction.class))).thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         TransferResponse response = transactionService.transfer(1L, new TransferRequest(2L, money(amount)));
         assertEquals(money(expectedSource), response.balance());
@@ -145,9 +143,8 @@ public class TransactionServiceTest {
 
     @Test
     void normalizesAmountTwoDecimals() {
-        Account existing = account(1L, "0.00");
+        Account existing = account(1L, "100.00");
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
-        when(accountTransactionRepository.calculateBalance(1L)).thenReturn(money("100.00"));
         when(accountTransactionRepository.save(any(AccountTransaction.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AccountTransactionResponse response = transactionService.createTransaction(1L, new AccountTransactionRequest(money("25"), TransactionType.DEPOSIT, null));
@@ -177,9 +174,8 @@ public class TransactionServiceTest {
     @CsvSource({"WITHDRAWAL, 100.00, 100.01, INSUFFICIENT_BALANCE",
             "DEPOSIT, 9999999999999.99, 0.01, BALANCE_LIMIT_EXCEEDED"})
     void transactionWithBalanceConflict(TransactionType type, String initialBalance, String amount, String code) {
-        Account existing = account(1L, "0.00");
+        Account existing = account(1L, initialBalance);
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(existing));
-        when(accountTransactionRepository.calculateBalance(1L)).thenReturn(money(initialBalance));
         ApiException exception = assertThrows(ApiException.class, () -> transactionService.createTransaction(1L, new AccountTransactionRequest(money(amount), type, null)));
         assertApiError(exception, HttpStatus.CONFLICT, code);
         verify(accountRepository, never()).save(any());
@@ -190,12 +186,10 @@ public class TransactionServiceTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void transfersThroughBothServiceEntryPoints(boolean useCreateTransaction) {
-        Account source = account(1L, "0.00");
-        Account destination = account(2L, "0.00");
+        Account source = account(1L, "100.00");
+        Account destination = account(2L, "50.00");
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(source));
-        when(accountTransactionRepository.calculateBalance(1L)).thenReturn(money("100.00"));
         when(accountRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(destination));
-        when(accountTransactionRepository.calculateBalance(2L)).thenReturn(money("50.00"));
         when(accountTransactionRepository.save(any(AccountTransaction.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AccountTransactionResponse response;
@@ -209,8 +203,8 @@ public class TransactionServiceTest {
         }
         assertEquals(new AccountTransactionResponse(100L, TransactionType.TRANSFER, money("25.00"), OCCURRED_AT,
                 money("75.00"), 1L, 2L, money("75.00")), response);
-        assertEquals(money("0.00"), source.getBalance());
-        assertEquals(money("0.00"), destination.getBalance());
+        assertEquals(money("100.00"), source.getBalance());
+        assertEquals(money("50.00"), destination.getBalance());
         var captor = org.mockito.ArgumentCaptor.forClass(AccountTransaction.class);
         verify(accountTransactionRepository).save(captor.capture());
         assertSame(source, captor.getValue().getAccount());
@@ -218,7 +212,9 @@ public class TransactionServiceTest {
         assertEquals(TransactionType.TRANSFER, captor.getValue().getType());
         assertEquals(money("25.00"), captor.getValue().getAmount());
         verify(accountRepository, never()).save(any());
-        verify(events).publishEvent(new TransactionPublisher.TransactionCreated(100L));
+        verify(events).publishEvent(new TransactionPublisher.BalanceChanged(1L, money("-25.00")));
+        verify(events).publishEvent(new TransactionPublisher.BalanceChanged(2L, money("25.00")));
+        verifyNoMoreInteractions(events);
     }
 
     @ParameterizedTest
@@ -251,12 +247,10 @@ public class TransactionServiceTest {
     @CsvSource({"10.00, 50.00, 25.00, INSUFFICIENT_BALANCE",
             "100.00, 9999999999999.99, 0.01, BALANCE_LIMIT_EXCEEDED"})
     void transferBalanceConflict(String sourceBalance, String destinationBalance, String amount, String code) {
-        Account source = account(1L, "0.00");
-        Account destination = account(2L, "0.00");
+        Account source = account(1L, sourceBalance);
+        Account destination = account(2L, destinationBalance);
         when(accountRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(source));
-        when(accountTransactionRepository.calculateBalance(1L)).thenReturn(money(sourceBalance));
         when(accountRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(destination));
-        when(accountTransactionRepository.calculateBalance(2L)).thenReturn(money(destinationBalance));
         ApiException exception = assertThrows(ApiException.class, () -> transactionService.transfer(1L, new TransferRequest(2L, money(amount))));
         assertApiError(exception, HttpStatus.CONFLICT, code);
         verify(accountRepository, never()).save(any());

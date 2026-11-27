@@ -2,9 +2,7 @@ package it.russello.contocorrente.controller;
 
 import it.russello.contocorrente.dto.AccountResponse;
 import it.russello.contocorrente.entity.Account;
-import it.russello.contocorrente.entity.AccountTransaction;
 import it.russello.contocorrente.entity.Person;
-import it.russello.contocorrente.entity.TransactionType;
 import it.russello.contocorrente.repository.AccountRepository;
 import it.russello.contocorrente.repository.AccountTransactionRepository;
 import jakarta.persistence.EntityManager;
@@ -64,9 +62,8 @@ class AuthorizationIT {
         other = savePerson("auth.other");
 
         source = new Account(owner, "AUTH-SOURCE");
+        source.setBalance(new BigDecimal("100.00"));
         accountRepository.saveAndFlush(source);
-        transactionRepository.saveAndFlush(
-                new AccountTransaction(source, TransactionType.DEPOSIT, new BigDecimal("100.00")));
 
         destination = accountRepository.saveAndFlush(
                 new Account(other, "AUTH-DESTINATION"));

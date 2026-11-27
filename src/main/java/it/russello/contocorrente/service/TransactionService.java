@@ -48,7 +48,7 @@ public class TransactionService {
         }
         BigDecimal amount = request.amount().setScale(2);
         Account account = requireAccountForUpdate(accountId);
-        BigDecimal currentBalance = accountTransactionRepository.calculateBalance(accountId);
+        BigDecimal currentBalance = account.getBalance();
         BigDecimal newBalance;
 
         switch (request.type()) {
@@ -69,7 +69,8 @@ public class TransactionService {
 
         AccountTransaction transaction = new AccountTransaction(account, request.type(), amount);
         AccountTransaction savedTransaction = accountTransactionRepository.save(transaction);
-        events.publishEvent(new TransactionPublisher.TransactionCreated(savedTransaction.getId()));
+        BigDecimal delta = request.type() == TransactionType.WITHDRAWAL ? amount.negate() : amount;
+        events.publishEvent(new TransactionPublisher.BalanceChanged(accountId, delta));
         return AccountTransactionResponse.from(savedTransaction, newBalance, null);
     }
 
@@ -94,8 +95,8 @@ public class TransactionService {
         Account source = sourceFirst ? first : second;
         Account destination = sourceFirst ? second : first;
 
-        BigDecimal currentSourceBalance = accountTransactionRepository.calculateBalance(sourceAccountId);
-        BigDecimal currentDestinationBalance = accountTransactionRepository.calculateBalance(destinationAccountId);
+        BigDecimal currentSourceBalance = source.getBalance();
+        BigDecimal currentDestinationBalance = destination.getBalance();
 
         if (currentSourceBalance.compareTo(amount) < 0) {
             throw new ApiException(HttpStatus.CONFLICT, "INSUFFICIENT_BALANCE", "Saldo insufficiente al trasferimento");
@@ -109,7 +110,8 @@ public class TransactionService {
 
         AccountTransaction transaction = new AccountTransaction(source, destination, amount);
         AccountTransaction savedTransaction = accountTransactionRepository.save(transaction);
-        events.publishEvent(new TransactionPublisher.TransactionCreated(savedTransaction.getId()));
+        events.publishEvent(new TransactionPublisher.BalanceChanged(sourceAccountId, amount.negate()));
+        events.publishEvent(new TransactionPublisher.BalanceChanged(destinationAccountId, amount));
         return TransferResponse.from(savedTransaction, sourceBalance, destinationBalance);
     }
 

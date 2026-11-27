@@ -78,14 +78,16 @@ public class TransactionControllerIT {
         entityManager.clear();
     }
 
-    private void deposit(Account account, BigDecimal amount) {
-        transactionRepository.saveAndFlush(new AccountTransaction(account, TransactionType.DEPOSIT, amount));
+    private void setInitialBalance(Account account, BigDecimal amount) {
+        Account managed = accountRepository.findById(account.getId()).orElseThrow();
+        managed.setBalance(amount);
+        entityManager.flush();
     }
 
     @ParameterizedTest
     @CsvSource({"DEPOSIT, 125.00", "WITHDRAWAL, 75.00"})
     void createTransaction(String type, BigDecimal expectedBalance) throws Exception {
-        deposit(source, new BigDecimal("100.00"));
+        setInitialBalance(source, new BigDecimal("100.00"));
         long counterBefore = transactionRepository.count();
         var response = mockMvc.perform(post("/api/account/{id}/transaction", source.getId()).with(admin(source.getPerson().getId()))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -115,15 +117,15 @@ public class TransactionControllerIT {
         assertEquals(0, new BigDecimal("25.00").compareTo(saved.getAmount()));
         assertEquals(source.getId(), saved.getAccount().getId());
         assertNull(saved.getDestinationAccount());
-        assertEquals(0, expectedBalance.compareTo(transactionRepository.calculateBalance(source.getId())));
-        assertEquals(0, accountRepository.findById(source.getId()).orElseThrow().getBalance().signum());
+        assertEquals(0, new BigDecimal("100.00").compareTo(
+                accountRepository.findById(source.getId()).orElseThrow().getBalance()));
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void transfer(boolean dedicatedEndpoint) throws Exception {
-        deposit(source, new BigDecimal("100.00"));
-        deposit(destination, new BigDecimal("50.00"));
+        setInitialBalance(source, new BigDecimal("100.00"));
+        setInitialBalance(destination, new BigDecimal("50.00"));
         long counterBefore = transactionRepository.count();
         String url = "/api/account/{id}/transaction" + (dedicatedEndpoint ? "/transfer" : "");
         String json = dedicatedEndpoint ? """
@@ -163,10 +165,10 @@ public class TransactionControllerIT {
         assertEquals(source.getId(), saved.getAccount().getId());
         assertEquals(destination.getId(), saved.getDestinationAccount().getId());
         assertNotNull(saved.getOccurredAt());
-        assertEquals(0, new BigDecimal("75.00").compareTo(transactionRepository.calculateBalance(source.getId())));
-        assertEquals(0, accountRepository.findById(source.getId()).orElseThrow().getBalance().signum());
-        assertEquals(0, new BigDecimal("75.00").compareTo(transactionRepository.calculateBalance(destination.getId())));
-        assertEquals(0, accountRepository.findById(destination.getId()).orElseThrow().getBalance().signum());
+        assertEquals(0, new BigDecimal("100.00").compareTo(
+                accountRepository.findById(source.getId()).orElseThrow().getBalance()));
+        assertEquals(0, new BigDecimal("50.00").compareTo(
+                accountRepository.findById(destination.getId()).orElseThrow().getBalance()));
     }
 
     @Test
@@ -251,7 +253,7 @@ public class TransactionControllerIT {
     @CsvSource({"WITHDRAWAL, 100.00, 100.01, INSUFFICIENT_BALANCE",
             "DEPOSIT, 9999999999999.99, 0.01, BALANCE_LIMIT_EXCEEDED"})
     void transactionConflictLeavesDatabaseUnchanged(String type, BigDecimal initialBalance, BigDecimal amount, String code) throws Exception {
-        deposit(source, initialBalance);
+        setInitialBalance(source, initialBalance);
         long before = transactionRepository.count();
         mockMvc.perform(post("/api/account/{id}/transaction", source.getId())
                         .with(admin(source.getPerson().getId()))
@@ -276,8 +278,8 @@ public class TransactionControllerIT {
         BigDecimal destinationBalance = scenario.equals("LIMIT")
                 ? new BigDecimal("9999999999999.99")
                 : new BigDecimal("50.00");
-        deposit(source, sourceBalance);
-        deposit(destination, destinationBalance);
+        setInitialBalance(source, sourceBalance);
+        setInitialBalance(destination, destinationBalance);
         Long targetId = scenario.equals("SAME") ? source.getId() : destination.getId();
         String amount = scenario.equals("FUNDS") ? "100.01" : "0.01";
         long before = transactionRepository.count();
@@ -342,8 +344,8 @@ public class TransactionControllerIT {
 
     private void assertStateUnchanged(BigDecimal expectedSource, BigDecimal expectedDestination, long expectedTransactions) {
         entityManager.clear();
-        assertEquals(0, expectedSource.compareTo(transactionRepository.calculateBalance(source.getId())));
-        assertEquals(0, expectedDestination.compareTo(transactionRepository.calculateBalance(destination.getId())));
+        assertEquals(0, expectedSource.compareTo(accountRepository.findById(source.getId()).orElseThrow().getBalance()));
+        assertEquals(0, expectedDestination.compareTo(accountRepository.findById(destination.getId()).orElseThrow().getBalance()));
         assertEquals(expectedTransactions, transactionRepository.count());
     }
 

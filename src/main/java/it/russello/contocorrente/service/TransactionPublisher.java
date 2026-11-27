@@ -8,6 +8,8 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.math.BigDecimal;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -18,20 +20,21 @@ public class TransactionPublisher {
     @Value("${app.kafka.transaction-topic}")
     private String topic;
 
-    public record TransactionCreated(Long id) {
+    public record BalanceChanged(Long accountId, BigDecimal delta) {
     }
 
     @TransactionalEventListener
-    public void publish(TransactionCreated event) {
-        String id = event.id().toString();
+    public void publish(BalanceChanged event) {
+        String accountId = event.accountId().toString();
         try {
-            kafka.send(topic, id, id).whenComplete((result, error) -> {
-                if (error != null) {
-                    log.error("Invio Kafka fallito per il movimento {}", id, error);
-                }
-            });
+            kafka.send(topic, accountId, event.delta().toPlainString())
+                    .whenComplete((result, error) -> {
+                        if (error != null) {
+                            log.error("Invio Kafka fallito per il conto {}", accountId, error);
+                        }
+                    });
         } catch (RuntimeException error) {
-            log.error("Invio Kafka fallito per il movimento {}", id, error);
+            log.error("Invio Kafka fallito per il conto {}", accountId, error);
         }
     }
 }
